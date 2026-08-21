@@ -2,9 +2,8 @@ name: Placement Grooming Report
 
 on:
   schedule:
-    # 01:00 UTC = 06:30 IST. Cron times are always UTC — adjust the hour
-    # here if you want a different local run time.
-    - cron: "0 1 * * *"
+    - cron: "30 3 * * *" 
+    #(03:30 UTC = 9:00 AM IST)
   workflow_dispatch: {}   # lets you trigger a run manually from the Actions tab
 
 jobs:
