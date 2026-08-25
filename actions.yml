@@ -29,7 +29,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Execute Assignment_Pipeline_Automation.py
+      - name: Execute placement_grooming.py.py
         env:
           METABASE_API_KEY: ${{ secrets.METABASE_API_KEY }}
           SERVICE_ACCOUNT_JSON: ${{ secrets.SERVICE_ACCOUNT_JSON }}
