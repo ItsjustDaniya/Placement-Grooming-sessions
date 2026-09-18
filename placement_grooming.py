@@ -22,6 +22,21 @@ reworked twice from the original:
   - Added the same retry-hardened requests.Session and safe_open_sheet() /
     safe_open_by_key() wrappers used in the other pipeline scripts, since
     this file didn't have either before.
+
+FIX (this pass): both Metabase calls (cards 7577 and 6289) were hitting
+`/api/card/:id/query/json` with NO request body at all (no `json=`, no
+`data=`) while the global METABASE_HEADERS still declared
+`Content-Type: application/json`. Metabase's `/query/:export-format`
+endpoints (json/csv/xlsx) are export endpoints, not the regular query
+endpoint — they parse `parameters` as a FORM field (the same way the
+"Download results" button in the Metabase UI submits it), not a JSON
+body. An empty body with a `Content-Type: application/json` header is
+enough on its own to make Metabase's JSON body-parser reject the request
+outright with a 400, before it even gets to checking what card you asked
+for — which is why this failed for both 7577 and 6289. Both calls now go
+through fetch_metabase_card_json(), which POSTs `parameters` as
+form-encoded data and sends no Content-Type override (letting requests
+set the correct one for form data).
 """
 
 import os
@@ -86,12 +101,42 @@ SESSION.mount("https://", _adapter)
 SESSION.mount("http://", _adapter)
 requests.post = SESSION.post
 
-# Static header used for every Metabase API call — no login step, no
-# token expiry/refresh to worry about.
+# Static header used for the regular (non-export) Metabase API calls — no
+# login step, no token expiry/refresh to worry about.
 METABASE_HEADERS = {
     "Content-Type": "application/json",
     "X-Api-Key": METABASE_API_KEY,
 }
+
+# Header for the /query/:export-format endpoints specifically — deliberately
+# NOT the same dict as METABASE_HEADERS above: no Content-Type override here,
+# since `data=` (form-encoded) needs `requests` to set its own multipart/
+# urlencoded content-type, not `application/json`.
+METABASE_EXPORT_HEADERS = {
+    "X-Api-Key": METABASE_API_KEY,
+}
+
+
+def fetch_metabase_card_json(card_id, parameters=None):
+    """POST to a Metabase card's `/query/json` export endpoint and return
+    a DataFrame of the full, untruncated result set.
+
+    Two things this deliberately gets right (see module docstring FIX note):
+      1. Uses the export endpoint (`/query/json`), not the plain `/query`
+         endpoint — the plain one silently caps interactive results at a
+         low row limit (commonly ~2000 rows) with no error, which will
+         quietly drop rows once a card has more than that.
+      2. Sends `parameters` as form-encoded `data`, not a JSON body — the
+         export endpoints parse it as a form field, and a JSON body (or an
+         empty body with a JSON content-type) gets rejected with a 400.
+    """
+    resp = requests.post(
+        f"{METABASE_BASE}/api/card/{card_id}/query/json",
+        headers=METABASE_EXPORT_HEADERS,
+        data={"parameters": json.dumps(parameters or [])},
+    )
+    resp.raise_for_status()
+    return pd.DataFrame(resp.json())
 
 
 def safe_open_sheet(title):
@@ -128,12 +173,7 @@ try:
     # ─────────────────────────────────────────────────────────────────────────────
     # Fetch lecture ratings data (Metabase card 7577)
     # ─────────────────────────────────────────────────────────────────────────────
-    res = requests.post(
-        f"{METABASE_BASE}/api/card/7577/query/json",
-        headers=METABASE_HEADERS,
-    )
-    res.raise_for_status()
-    df = pd.DataFrame(res.json())
+    df = fetch_metabase_card_json(7577)
     print(f"✓ Fetched {len(df):,} rows from card 7577")
 
     df["business_acumen_1"] = df["business_acumen"].str.extract(r"(\d+)").astype(float).astype("Int64")
@@ -176,12 +216,7 @@ try:
     # ─────────────────────────────────────────────────────────────────────────────
     # Fetch batch names (Metabase card 6289) and merge
     # ─────────────────────────────────────────────────────────────────────────────
-    res3 = requests.post(
-        f"{METABASE_BASE}/api/card/6289/query/json",
-        headers=METABASE_HEADERS,
-    )
-    res3.raise_for_status()
-    df3 = pd.DataFrame(res3.json())
+    df3 = fetch_metabase_card_json(6289)
     print(f"✓ Fetched {len(df3):,} rows from card 6289")
 
     df3 = df3[["user_id", "au_batch_name"]]
